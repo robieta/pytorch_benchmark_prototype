@@ -3,6 +3,7 @@ from typing import List, Optional
 import numpy as np
 
 
+_MAX_SIGNIFICANT_FIGURES = 4
 _IQR_WARN_THRESHOLD = 0.1
 _IQR_GROSS_WARN_THRESHOLD = 0.25
 _IQR_WARN_TEMPLATE = (
@@ -18,6 +19,11 @@ def select_unit(t):
     )
     time_scale = {"ns": 1e-9, "us": 1e-6, "ms": 1e-3, "s": 1}[time_unit]
     return time_unit, time_scale
+
+def unit_to_english(u: str):
+    return {
+        "ns": "nanosecond", "us": "microsecond", "ms":
+        "millisecond", "s": "second"}[u]
 
 
 class Measurement:
@@ -38,7 +44,7 @@ class Measurement:
         self.label = label
         self.sub_label = sub_label
         self.description = description
-        self.env = env
+        self._env = env
         self.num_threads = num_threads
         self.stmt = stmt
         self.metadata = metadata
@@ -67,7 +73,7 @@ class Measurement:
             "label": self.label,
             "sub_label": self.sub_label,
             "description": self.description,
-            "env": self.env,
+            "env": self._env,
             "num_threads": self.num_threads,
             "number_per_run": self.number_per_run,
             "times": self.times,
@@ -87,6 +93,11 @@ class Measurement:
         return self._median
 
     @property
+    def significant_figures(self):
+        return min(max(int(np.ceil(np.log10(self._median / self._iqr))), 1),
+                   _MAX_SIGNIFICANT_FIGURES)
+
+    @property
     def title(self):
         if self.label is not None:
             label = self.label
@@ -98,26 +109,29 @@ class Measurement:
         return label + (f": {self.sub_label}" if self.sub_label else "")
 
     @property
+    def env(self):
+        return "Unspecified env" if self._env is None else self._env
+
+    @property
     def as_row_name(self):
         return self.sub_label or self.stmt or "[Unknown]"
 
     def __repr__(self):
-        return super().__repr__()
-        # repr = [super().__repr__(), "\n", self.title, "\n"]
+        repr = [super().__repr__(), "\n", self.title, "\n"]
 
-        # time_unit, time_scale = select_unit(self.median)
-        # repr.extend(
-        #     [
-        #         f"  Median: {self._median / time_scale:.2f} {time_unit}\n",
-        #         f"  IQR:    {self._iqr / time_scale:.2f} {time_unit} "
-        #         f"({self._bottom_quartile / time_scale:.2f} to {self._top_quartile / time_scale:.2f})\n",
-        #     ]
-        # )
-        # repr.extend([
-        #     f"  {len(self.times)} measurements, "
-        #     f"{self.number_per_run} runs per measurement, "
-        #     f"{self.num_threads} thread{'s' if self.num_threads > 1 else ''}\n"
-        # ])
-        # repr.extend(self._warnings)
+        time_unit, time_scale = select_unit(self.median)
+        repr.extend(
+            [
+                f"  Median: {self._median / time_scale:.2f} {time_unit}\n",
+                f"  IQR:    {self._iqr / time_scale:.2f} {time_unit} "
+                f"({self._bottom_quartile / time_scale:.2f} to {self._top_quartile / time_scale:.2f})\n",
+            ]
+        )
+        repr.extend([
+            f"  {len(self.times)} measurements, "
+            f"{self.number_per_run} runs per measurement, "
+            f"{self.num_threads} thread{'s' if self.num_threads > 1 else ''}\n"
+        ])
+        repr.extend(self._warnings)
 
-        # return "".join(repr).strip()
+        return "".join(repr).strip()

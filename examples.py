@@ -52,7 +52,11 @@ def compare():
             self._extra_ns_per_element = extra_ns_per_element
 
         def extra_overhead(self, result):
-            time.sleep(result.numel() * self._extra_ns_per_element * 1e-9)
+            # time.sleep has a ~65 us overhead, so only fake a
+            # per-element overhead if numel is large enough.
+            numel = int(result.numel())
+            if numel > 5000:
+                time.sleep(numel * self._extra_ns_per_element * 1e-9)
             return result
 
         def add(self, *args, **kwargs):
@@ -67,12 +71,12 @@ def compare():
         def matmul(self, *args, **kwargs):
             return self.extra_overhead(self._real_torch.matmul(*args, **kwargs))
 
-    tasks = {
-        "add": "torch.add(x, y)",
-        # "mul": "torch.mul(x, y)",
-        # "cat": "torch.cat((x, y), dim=0)",
-        # "matmul": "torch.matmul(x, y.transpose(0, 1))",
-    }
+    tasks = [
+        ("add", "add", "torch.add(x, y)"),
+        ("add", "add (extra +0)", "torch.add(x, y + 0)"),
+        ("matmul", "matmul", "torch.matmul(x, y.transpose(0, 1))"),
+        ("matmul", "matmul (with contiguous)", "torch.matmul(x, y.transpose(0, 1).contiguous())"),
+    ]
 
     serialized_results = []
     repeats = 2
@@ -80,18 +84,19 @@ def compare():
         benchmark_utils.Timer(
             stmt=stmt,
             globals={
-                "torch": FauxTorch(torch, overhead_ns),
+                "torch": torch if branch == "master" else FauxTorch(torch, overhead_ns),
                 "x": torch.ones((size, 4)),
                 "y": torch.ones((1, 4)),
             },
             label=label,
-            description=f"({size}, 4), (1, 4)",
+            sub_label=sub_label,
+            description=f"size: {size}",
             env=branch,
             num_threads=num_threads,
         )
-        for branch, overhead_ns in [("master", 10), ("my_super_fast_branch", 5)]
-        for label, stmt in tasks.items()
-        for size in [1, 1000, 10000]
+        for branch, overhead_ns in [("master", None), ("my_branch", 1), ("severe_regression", 5)]
+        for label, sub_label, stmt in tasks
+        for size in [1, 10, 100, 1000, 10000, 50000]
         for num_threads in [1, 4]
     ]
 
@@ -106,6 +111,13 @@ def compare():
     comparison = benchmark_utils.Compare([
         pickle.loads(i) for i in serialized_results
     ])
+
+    print("== Unformatted " + "=" * 80 + "\n" + "/" * 95 + "\n")
+    comparison.print()
+
+    print("== Formatted " + "=" * 80 + "\n" + "/" * 93 + "\n")
+    comparison.trim_significant_figures()
+    comparison.colorize()
     comparison.print()
 
 
