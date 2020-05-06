@@ -1,10 +1,13 @@
 import inspect
 import logging
 import timeit
-import typing
+from typing import Callable, NamedTuple, Optional
 
 import numpy as np
 import torch
+
+from . import common
+
 
 if torch.has_cuda:
     def timer():
@@ -14,109 +17,44 @@ else:
     timer = timeit.default_timer
 
 
-_IQR_WARN_THRESHOLD = 0.05
 _MAX_RERUN_ON_WARNINGS = 5
 
 
-class Measurement:
-    def __init__(self, label: typing.Optional[str],
-                 sub_label: typing.Optional[str], num_threads: int,
-                 number_per_run: int, times: typing.List[float],
-                 stmt: typing.Optional[str],
-                 metadata: typing.Optional[dict]):
-        self.label = label
-        self.sub_label = sub_label
-        self.num_threads = num_threads
-        self.number_per_run = number_per_run
-        self.times = times
-        self.stmt = stmt
-        self.metadata = metadata
-
-        self._sorted_times = sorted([t / number_per_run for t in times])
-        self._median = np.median(self._sorted_times)
-        self._bottom_quartile = np.percentile(self._sorted_times, 25)
-        self._top_quartile = np.percentile(self._sorted_times, 75)
-        self._iqr = self._top_quartile - self._bottom_quartile
-        self._warnings = []
-        if self._iqr / self._median > _IQR_WARN_THRESHOLD:
-            rel_iqr = self._iqr / self._median * 100
-            self._warnings.append(
-                f"  WARNING: Interquartile range is {rel_iqr:.1f}% of the "
-                "median measurement.\n"
-                f"{' ' * 11}This could indicate system fluctuation.\n",
-            )
-
-    def __getstate__(self):
-        return {
-            "label": self.label, "sub_label": self.sub_label,
-            "num_threads": self.num_threads,
-            "number_per_run": self.number_per_run, "times": self.times,
-            "stmt": self.stmt, "metadata": metadata
-        }
-
-    def __setstate__(self, state):
-        self.__init__(**state)
-
-    @property
-    def title(self):
-        if self.label is not None:
-            label = self.label
-        elif isinstance(self.stmt, str):
-            label = self.stmt
-        else:
-            label = "[Missing primary label]"
-
-        return label + (f": {self.sub_label}" if self.sub_label else "")
-
-    @property
-    def mean(self):
-        return np.mean(self._sorted_times)
-
-    @property
-    def median(self):
-        return self._median
-
-    def __repr__(self):
-        repr = [super().__repr__(), "\n", self.title, "\n"]
-
-        time_unit = ({-3: "ns", -2: "us", -1: "ms"}
-            .get(int(np.log10(self._median) // 3), "s"))
-        time_scale = {"ns": 1e-9, "us": 1e-6, "ms": 1e-3, "s": 1}[time_unit]
-
-        repr.extend([
-            f"  Median: {self._median / time_scale:.2f} {time_unit}\n",
-            f"  IQR:    {self._iqr / time_scale:.2f} {time_unit} "
-            f"({self._bottom_quartile / time_scale:.2f} to {self._top_quartile / time_scale:.2f})\n"
-        ])
-        repr.append(f"  {len(self.times)} measurements, {self.number_per_run} runs per measurement\n")
-        repr.append(f"  {self.num_threads} thread{'s' if self.num_threads > 1 else ''}\n")
-        repr.extend(self._warnings)
-
-        return "".join(repr).strip()
-
-
-class Example(typing.NamedTuple):
+class Example(NamedTuple):
     globals: dict
-    sub_label: typing.Optional[str]
-    metadata: typing.Optional[dict]
+    description: Optional[str]
+    metadata: Optional[dict]
 
 
 class ExampleGenerator(object):
-    default_number = 10
-    def take(self, n):
+    def take(self, n: int):
         raise NotImplementedError
 
-    def take_internal(self, n):
-        if n is None:
-            n = self.default_number
-        for i in self.take(n):
-            assert isinstance(i, Example)
-            yield i
+    def take_internal(self, n: int):
+        for i, example in enumerate(self.take(n)):
+            if not isinstance(example, Example):
+                raise ValueError("`.take` should yield Examples,"
+                                 f"got {type(i)} instead")
+            yield example
+
+        if (i + 1) != n:
+            logging.warning(f" Expected {n} examples, but {i + 1} were "
+                            "produced by `.take`")
 
 
 class Timer(object):
-    def __init__(self, stmt="pass", setup="pass", timer=timer, globals=None,
-                 label=None, num_threads=1):
+    def __init__(
+        self,
+        stmt="pass",
+        setup="pass",
+        timer=timer,
+        globals: Optional[dict] = None,
+        label: Optional[str] = None,
+        sub_label: Optional[str] = None,
+        description: Optional[str] = None,
+        env: Optional[str] = None,
+        num_threads=1,
+    ):
         self._stmt = stmt
         self._setup = setup
         self._timer = timer
@@ -124,20 +62,42 @@ class Timer(object):
         self._gen_globals = isinstance(globals, ExampleGenerator)
 
         self._label = label
+        self._sub_label = sub_label
+        if self._gen_globals and description is not None:
+            raise ValueError(
+                "`description` should not be provided when globals is an "
+                "ExampleGenerator. Include it in the `description` field "
+                "of the Examples instead.")
+        self._description = description
+        self._env = env
         self._num_threads = num_threads
 
         # Make sure the init args are valid.
+        g = next(globals.take_internal(1)).globals if self._gen_globals else globals
         t = timeit.Timer(
-            stmt=stmt, setup=setup, timer=timer,
-            globals=next(globals.take_internal(1)).globals if self._gen_globals
-                    else globals)
+            stmt=stmt,
+            setup=setup,
+            timer=timer,
+            globals=g,
+        )
 
         self.t = None if self._gen_globals else t
 
-    def autorange(self, callback=None):
-        raise NotImplementedError
+    #TODO(robieta): `def timeit(self):`
 
-    def _blocked_autorange(self, timer: timeit.Timer, callback, min_run_time, sub_label=None, metadata=None):
+    def autorange(self, callback=None):
+        raise NotImplementedError("See `Timer.blocked_autorange.`")
+
+    def _blocked_autorange(
+        self,
+        timer: timeit.Timer,
+        callback: Optional[Callable],
+        min_run_time: float,
+        description: Optional[str]=None,
+        metadata: Optional[str]=None
+    ):
+        # Estimate the block size needed for measurement to be negligible
+        # compared to the inner loop.
         overhead = np.median([timer.timeit(0) for _ in range(5)])
         number = 1
         while True:
@@ -147,8 +107,10 @@ class Timer(object):
                 break
             number *= 10
 
-        total_time = 0
-        times = []
+        # Don't waste the last measurement of the block size determination.
+        total_time = time_taken
+        times = [time_taken]
+
         while total_time < min_run_time:
             time_taken = timer.timeit(number)
             total_time += time_taken
@@ -156,30 +118,54 @@ class Timer(object):
                 callback(number, time_taken)
             times.append(time_taken)
 
-        return Measurement(
-            label=self._label, sub_label=sub_label,
-            num_threads=self._num_threads, number_per_run=number, times=times,
-            stmt=self._stmt, metadata=metadata)
+        return common.Measurement(
+            number_per_run=number,
+            times=times,
+            num_threads=self._num_threads,
+            label=self._label,
+            sub_label=self._sub_label,
+            description=description,
+            env=self._env,
+            stmt=self._stmt,
+            metadata=metadata,
+        )
 
-    def blocked_autorange(self, callback=None, min_run_time=0.2, rerun_on_warning=False, n=None):
+
+    def blocked_autorange(
+        self,
+        callback: Optional[Callable]=None,
+        min_run_time: float=0.2,
+        rerun_on_warning: bool=False,
+        n: Optional[int]=None
+    ):
         if n is not None and not self._gen_globals:
-            raise ValueError("`n` should only be specified if `globals` is an "
-                             "ExampleGenerator. (e.g. a Fuzzer)")
-        output = []
+            raise ValueError(
+                "`n` should only be specified if `globals` is an "
+                "ExampleGenerator.")
+        if self._gen_globals and n is None:
+            raise ValueError("`n` must be specified if `globals` "
+                             "is an ExampleGenerator.")
+
         prior_num_threads = torch.get_num_threads()
         torch.set_num_threads(self._num_threads)
 
-        def collect_measurement(timer, sub_label=None, metadata=None):
+        def collect_measurement(timer, description=None, metadata=None):
             measure = lambda: self._blocked_autorange(
-                timer=timer, callback=callback, min_run_time=min_run_time,
-                sub_label=sub_label, metadata=metadata)
+                timer=timer,
+                callback=callback,
+                min_run_time=min_run_time,
+                description=description,
+                metadata=metadata,
+            )
 
             measurement = measure()
             count = 1
             while rerun_on_warning and measurement._warnings:
                 if count == _MAX_RERUN_ON_WARNINGS:
-                    logging.warning(f" Trial still has warnings after {count} attempts. " +
-                                    f"Aborting reruns. {measurement.title}")
+                    logging.warning(
+                        f" Trial still has warnings after {count} attempts. "
+                        + f"Aborting reruns. {measurement.title}"
+                    )
                     break
                 measurement = measure()
                 count += 1
@@ -187,13 +173,21 @@ class Timer(object):
             return measurement
 
         if self._gen_globals:
+            output = []
             for example in self._globals.take_internal(n):
                 timer = timeit.Timer(
-                    stmt=self._stmt, setup=self._setup, timer=self._timer,
-                    globals=example.globals)
-                output.append(collect_measurement(timer, example.sub_label, metadata=example.metadata))
+                    stmt=self._stmt,
+                    setup=self._setup,
+                    timer=self._timer,
+                    globals=example.globals,
+                )
+                output.append(
+                    collect_measurement(
+                        timer, example.description, example.metadata
+                    )
+                )
         else:
-            output.append(collect_measurement(self.t))
+            output = collect_measurement(self.t, self._description)
 
         torch.set_num_threads(prior_num_threads)
         return output
