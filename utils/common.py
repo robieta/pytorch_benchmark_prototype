@@ -102,21 +102,22 @@ class Measurement:
         return self.sub_label or self.stmt or "[Unknown]"
 
     def __repr__(self):
-        repr = [super().__repr__(), "\n", self.title, "\n"]
+        return super().__repr__()
+        # repr = [super().__repr__(), "\n", self.title, "\n"]
 
-        time_unit, time_scale = select_unit(self.median)
-        repr.extend(
-            [
-                f"  Median: {self._median / time_scale:.2f} {time_unit}\n",
-                f"  IQR:    {self._iqr / time_scale:.2f} {time_unit} "
-                f"({self._bottom_quartile / time_scale:.2f} to {self._top_quartile / time_scale:.2f})\n",
-            ]
-        )
-        repr.extend([
-            f"  {len(self.times)} measurements, "
-            f"{self.number_per_run} runs per measurement, "
-            f"{self.num_threads} thread{'s' if self.num_threads > 1 else ''}\n"
-        ])
-        repr.extend(self._warnings)
+        # time_unit, time_scale = select_unit(self.median)
+        # repr.extend(
+        #     [
+        #         f"  Median: {self._median / time_scale:.2f} {time_unit}\n",
+        #         f"  IQR:    {self._iqr / time_scale:.2f} {time_unit} "
+        #         f"({self._bottom_quartile / time_scale:.2f} to {self._top_quartile / time_scale:.2f})\n",
+        #     ]
+        # )
+        # repr.extend([
+        #     f"  {len(self.times)} measurements, "
+        #     f"{self.number_per_run} runs per measurement, "
+        #     f"{self.num_threads} thread{'s' if self.num_threads > 1 else ''}\n"
+        # ])
+        # repr.extend(self._warnings)
 
-        return "".join(repr).strip()
+        # return "".join(repr).strip()
