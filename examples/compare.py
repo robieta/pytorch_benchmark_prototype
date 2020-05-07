@@ -1,4 +1,4 @@
-"""Trivial use of revised Timer API:
+"""Example of Timer and Compare APIs:
 
 $ python -m examples.compare
 """

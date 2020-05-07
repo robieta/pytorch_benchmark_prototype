@@ -1,7 +1,8 @@
 import inspect
 import logging
+import sys
 import timeit
-from typing import Callable, NamedTuple, Optional
+from typing import Callable, Optional
 
 import numpy as np
 import torch
@@ -18,28 +19,6 @@ else:
 
 
 _MAX_RERUN_ON_WARNINGS = 5
-
-
-class Example(NamedTuple):
-    globals: dict
-    description: Optional[str]
-    metadata: Optional[dict]
-
-
-class ExampleGenerator(object):
-    def take(self, n: int):
-        raise NotImplementedError
-
-    def take_internal(self, n: int):
-        for i, example in enumerate(self.take(n)):
-            if not isinstance(example, Example):
-                raise ValueError("`.take` should yield Examples,"
-                                 f"got {type(i)} instead")
-            yield example
-
-        if (i + 1) != n:
-            logging.warning(f" Expected {n} examples, but {i + 1} were "
-                            "produced by `.take`")
 
 
 class Timer(object):
@@ -59,7 +38,7 @@ class Timer(object):
         self._setup = setup
         self._timer = timer
         self._globals = globals
-        self._gen_globals = isinstance(globals, ExampleGenerator)
+        self._gen_globals = isinstance(globals, common.ExampleGenerator)
 
         self._label = label
         self._sub_label = sub_label
@@ -136,7 +115,8 @@ class Timer(object):
         callback: Optional[Callable]=None,
         min_run_time: float=0.2,
         rerun_on_warning: bool=False,
-        n: Optional[int]=None
+        n: Optional[int]=None,
+        display_progress: bool=False,
     ):
         if n is not None and not self._gen_globals:
             raise ValueError(
@@ -174,7 +154,7 @@ class Timer(object):
 
         if self._gen_globals:
             output = []
-            for example in self._globals.take_internal(n):
+            for i, example in enumerate(self._globals.take_internal(n)):
                 timer = timeit.Timer(
                     stmt=self._stmt,
                     setup=self._setup,
@@ -186,6 +166,11 @@ class Timer(object):
                         timer, example.description, example.metadata
                     )
                 )
+                if display_progress:
+                    print(f"\r{i + 1} / {n} ", end="")
+                    sys.stdout.flush()
+            if display_progress:
+                print()
         else:
             output = collect_measurement(self.t, self._description)
 

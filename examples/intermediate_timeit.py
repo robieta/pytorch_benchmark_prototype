@@ -1,4 +1,4 @@
-"""Trivial use of revised Timer API:
+"""Intermediate use of revised Timer API (simple custom ExampleGenerator):
 
 $ python -m examples.intermediate_timeit
 """

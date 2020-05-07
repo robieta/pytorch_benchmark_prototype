@@ -1,4 +1,4 @@
-from typing import List, Optional
+from typing import List, NamedTuple, Optional
 
 import numpy as np
 
@@ -135,3 +135,25 @@ class Measurement:
         repr.extend(self._warnings)
 
         return "".join(repr).strip()
+
+
+class Example(NamedTuple):
+    globals: dict
+    description: Optional[str]
+    metadata: Optional[dict]
+
+
+class ExampleGenerator(object):
+    def take(self, n: int):
+        raise NotImplementedError
+
+    def take_internal(self, n: int):
+        for i, example in enumerate(self.take(n)):
+            if not isinstance(example, Example):
+                raise ValueError("`.take` should yield Examples,"
+                                 f"got {type(i)} instead")
+            yield example
+
+        if (i + 1) != n:
+            logging.warning(f" Expected {n} examples, but {i + 1} were "
+                            "produced by `.take`")
