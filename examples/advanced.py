@@ -31,10 +31,15 @@ _CONFIGURATIONS = (
     ("branch", "batch_major"),
     ("branch", "feature_major"),
 )
+_DTYPE_STR_TO_DTYPE = {
+    "int64": torch.int64,
+    "int32": torch.int32,
+    "int8": torch.int8,
+}
 
 
 class GatherFuzzer(benchmark_utils.Fuzzer):
-    def __init__(self):
+    def __init__(self, dtype=torch.int32):
         super(GatherFuzzer, self).__init__(
             parameters = [
                 benchmark_utils.FuzzedParameter("k0", 4, 16 * 1024, "loguniform"),
@@ -46,7 +51,9 @@ class GatherFuzzer(benchmark_utils.Fuzzer):
             ],
             tensors = [
                 benchmark_utils.FuzzedTensor(
-                    name="x", size=("k0", "k1", "k2"), dim_parameter="d", roll_parameter="dim",
+                    name="x", size=("k0", "k1", "k2"),
+                    tensor_constructor=lambda size, **kwargs: torch.randint(0, 127, size=size, dtype=dtype),
+                    dim_parameter="d", roll_parameter="dim",
                     probability_contiguous=0.75, max_elements=128 * 1024,
                 ),
                 benchmark_utils.FuzzedTensor(
@@ -57,7 +64,7 @@ class GatherFuzzer(benchmark_utils.Fuzzer):
                 ),
                 benchmark_utils.FuzzedTensor(
                     name="out", size=("m", "k1", "k2"),
-                    tensor_constructor=lambda size, **kwargs: torch.empty(size),
+                    tensor_constructor=lambda size, **kwargs: torch.empty(size, dtype=dtype),
                     dim_parameter="d", roll_parameter="dim",
                     probability_contiguous=0.75, max_elements=64 * 100000,
                 )
@@ -70,8 +77,24 @@ class GatherFuzzer(benchmark_utils.Fuzzer):
         for i, example in enumerate(super(GatherFuzzer, self).take(n)):
             example.globals["torch"] = torch
             example.globals["dim"] = example.metadata["dim"]
-            yield benchmark_utils.Example(
+            result = benchmark_utils.Example(
                 example.globals, f"[{i}]", example.metadata)
+            result.metadata["pretty_str"] = self.pretty_str(result)
+            yield result
+
+    @staticmethod
+    def pretty_str(example: benchmark_utils.Example):
+        globals, description, metadata = example
+        x, index, out = [globals[i] for i in ["x", "index", "out"]]
+        def order(key):
+            key = key + "_order"
+            if np.all(metadata[key] == np.arange(len(metadata[key]))):
+                return ("-" * len(str(metadata[key]))).ljust(7)
+            return str(metadata[key]).ljust(7)
+        return (
+            f"{description:>5}  | {index.numel() / 1000:>7.1f}{' ' * 6}"
+            f"{x.numel() / 1000:>7.1f}{' ' * 8}{globals['dim']}     "
+            f"{order('index')}   {order('x')}   {order('out')}")
 
 
 
@@ -85,17 +108,18 @@ def subprocess_main(env: str, heuristic: str, result_file:str):
     if heuristic:
         torch.set_sg_heuristic("gather", heuristic)
 
-    timer = benchmark_utils.Timer(
-        stmt="torch.gather(x, dim, index, out=out)",
-        globals=GatherFuzzer(),
-        label="gather",
-        sub_label="gather" + (f" ({heuristic})" if heuristic else ""),
-        env=env,
-    )
-
     with open(result_file, "wb") as f:
-        for i in timer.blocked_autorange(n=_NUM_RUNS):
-            pickle.dump(i, f)
+        for dtype_str, dtype in _DTYPE_STR_TO_DTYPE.items():
+            timer = benchmark_utils.Timer(
+                stmt="torch.gather(x, dim, index, out=out)",
+                globals=GatherFuzzer(dtype=dtype),
+                label=f"gather ({dtype_str})",
+                sub_label="gather" + (f" ({heuristic})" if heuristic else ""),
+                env=env,
+            )
+
+            for i in timer.blocked_autorange(n=_NUM_RUNS):
+                pickle.dump(i, f)
 
 
 def _main():
@@ -110,6 +134,12 @@ def _main():
     compare.trim_significant_figures()
     compare.colorize()
     compare.print()
+
+    print(f"""
+          index         table       dim    index     x         output
+          numel (k)     numel (k)          order     order     order\n{'_' * 80}""")
+    for example in GatherFuzzer(dtype=torch.int64).take(_NUM_RUNS):
+        print(example.metadata["pretty_str"])
 
 
 def invoke_subprocess(env: str, heuristic: str):

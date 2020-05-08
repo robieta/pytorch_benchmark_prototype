@@ -245,7 +245,7 @@ class Table(object):
             finalized_columns.append("  |  ".join(row.finalize_column_strings(string_row, col_widths)))
         print("[" + (" " + self.label + " ").center(overall_width - 2, "-") + "]")
         print("\n".join(finalized_columns))
-        print(f"\nTimes are in {common.unit_to_english(self.time_unit)}s ({self.time_unit}).", "\n" * 4)
+        print(f"\nTimes are in {common.unit_to_english(self.time_unit)}s ({self.time_unit}).", "\n" * 2)
 
 
 class Compare(object):
