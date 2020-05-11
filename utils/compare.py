@@ -16,12 +16,6 @@ BOLD = "\033[1m"
 TERMINATE = "\033[0m"
 
 
-def trim_sigfig(x, n):
-    magnitude = int(np.ceil(np.log10(np.abs(x))))
-    scale = 10 ** (magnitude - n)
-    return np.round(x / scale) * scale
-
-
 def ordered_unique(elements, key_fn=None):
     if key_fn is None:
         key_fn = lambda x: x
@@ -70,7 +64,7 @@ class Column(object):
 
     def num_to_str(self, value: float, estimated_sigfigs: int):
         if self._trim_significant_figures:
-            value = trim_sigfig(value, estimated_sigfigs)
+            value = common.trim_sigfig(value, estimated_sigfigs)
         return self._template.format(value)
 
 
